@@ -1,0 +1,33 @@
+project:
+  name: quant-trading-system
+  version: "0.1.0"
+
+assets:
+  - symbol: "WDO"
+    yfinance_ticker: "WDO=F"
+    fallback_ticker: "USDBRL=X"
+    exchange: "B3"
+    type: "futures"
+    description: "Mini dolar futuro"
+  - symbol: "WIN"
+    yfinance_ticker: "^BVSP"
+    fallback_ticker: "^BVSP"
+    exchange: "B3"
+    type: "futures"
+    description: "Mini indice futuro (Ibovespa proxy)"
+
+timeframes:
+  - "1m"
+  - "5m"
+
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  format: "parquet"
+
+ingestion:
+  max_period_1m: "7d"
+  max_period_5m: "60d"
+  source: "yfinance"
+  max_retries: 3
+  retry_delay_seconds: 5

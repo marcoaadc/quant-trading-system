@@ -24,7 +24,6 @@ import pandas as pd
 from loguru import logger
 from statsmodels.tsa.stattools import adfuller, kpss
 
-
 # ---------------------------------------------------------------------------
 # Feature column names (canonical order)
 # ---------------------------------------------------------------------------

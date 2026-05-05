@@ -11,9 +11,8 @@ Reference: docs/specs/sprint2_hmm_regime_detection.md
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
@@ -21,7 +20,6 @@ from loguru import logger
 from sklearn.cluster import KMeans
 
 from src.features.regime_features import FEATURE_COLUMNS
-
 
 # ---------------------------------------------------------------------------
 # Data containers
@@ -70,7 +68,7 @@ class HMMRegimeDetector:
     """
 
     # Maps covariance_type to hmmlearn's expected string
-    _COV_TYPE_MAP: dict[str, str] = {
+    _COV_TYPE_MAP: ClassVar[dict[str, str]] = {
         "full": "full",
         "diagonal": "diag",
         "diag": "diag",

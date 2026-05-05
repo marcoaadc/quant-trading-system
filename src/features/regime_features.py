@@ -189,6 +189,10 @@ class RegimeFeatureEngineer:
         CRITICAL: The volume baseline uses ``.shift(1)`` to exclude the
         current candle, preventing look-ahead bias.
 
+        When volume data is unavailable (all zeros, as happens with
+        yfinance proxy tickers like USDBRL=X or ^BVSP), the feature
+        is set to 0.0 (neutral) to avoid NaN propagation.
+
         Args:
             df: OHLCV DataFrame with a ``volume`` column.
 
@@ -196,6 +200,16 @@ class RegimeFeatureEngineer:
             Series of log relative volume values.
         """
         volume = df["volume"].astype(float)
+
+        # If all volume is zero (proxy data without volume), return
+        # neutral feature (0.0 = ln(1) = no relative change)
+        if (volume == 0).all() or volume.sum() == 0:
+            logger.warning(
+                "Volume is all zeros -- likely a proxy ticker without "
+                "volume data. Setting log_rel_volume to 0.0 (neutral)."
+            )
+            neutral = pd.Series(0.0, index=df.index, name="log_rel_volume")
+            return neutral
 
         # .shift(1) ensures we use V_{t-1}..V_{t-K} (excludes current candle)
         volume_mean = (
@@ -206,6 +220,9 @@ class RegimeFeatureEngineer:
             )
             .mean()
         )
+
+        # Guard against zero denominator (sparse volume periods)
+        volume_mean = volume_mean.replace(0.0, np.nan)
 
         relative_volume = volume / volume_mean
         log_rv: pd.Series = np.log(relative_volume + self.epsilon)
@@ -362,6 +379,26 @@ class RegimeFeatureEngineer:
                     "stationarity test",
                     col,
                     len(series),
+                )
+                continue
+
+            # Skip constant series (e.g., volume=0 proxy data)
+            if series.max() == series.min():
+                logger.warning(
+                    "Feature '{}' is constant (value={}), marking as "
+                    "stationary by definition",
+                    col,
+                    series.iloc[0],
+                )
+                results[col] = StationarityResult(
+                    feature=col,
+                    adf_statistic=0.0,
+                    adf_pvalue=0.0,
+                    adf_reject_h0=True,
+                    kpss_statistic=0.0,
+                    kpss_pvalue=1.0,
+                    kpss_reject_h0=False,
+                    conclusion="stationary",
                 )
                 continue
 

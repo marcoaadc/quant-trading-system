@@ -170,15 +170,11 @@ class OHLCVIngestor:
 
         for asset in self._assets:
             if "symbol" not in asset or "yfinance_ticker" not in asset:
-                raise ValueError(
-                    f"Each asset must have 'symbol' and 'yfinance_ticker' keys. Got: {asset}"
-                )
+                raise ValueError(f"Each asset must have 'symbol' and 'yfinance_ticker' keys. Got: {asset}")
 
         for tf in self._timeframes:
             if tf not in _PERIOD_BY_TIMEFRAME:
-                raise ValueError(
-                    f"Unsupported timeframe '{tf}'. Supported: {list(_PERIOD_BY_TIMEFRAME.keys())}"
-                )
+                raise ValueError(f"Unsupported timeframe '{tf}'. Supported: {list(_PERIOD_BY_TIMEFRAME.keys())}")
 
     def _download_with_fallback(
         self,

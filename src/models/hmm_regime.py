@@ -11,7 +11,9 @@ Reference: docs/specs/sprint2_hmm_regime_detection.md
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
@@ -67,12 +69,15 @@ class HMMRegimeDetector:
         random_state: RNG seed for reproducibility (default 42).
     """
 
-    # Maps covariance_type to hmmlearn's expected string
     _COV_TYPE_MAP: ClassVar[dict[str, str]] = {
         "full": "full",
         "diagonal": "diag",
         "diag": "diag",
     }
+
+    _VALID_COV_TYPES: ClassVar[frozenset[str]] = frozenset(
+        {"full", "diagonal", "diag"}
+    )
 
     def __init__(
         self,
@@ -83,6 +88,12 @@ class HMMRegimeDetector:
         n_init: int = 10,
         random_state: int = 42,
     ) -> None:
+        if covariance_type not in self._VALID_COV_TYPES:
+            raise ValueError(
+                f"Unsupported covariance_type '{covariance_type}'. "
+                f"Valid: {sorted(self._VALID_COV_TYPES)}"
+            )
+
         self.n_states = n_states
         self.covariance_type = covariance_type
         self.n_iter = n_iter
@@ -191,7 +202,7 @@ class HMMRegimeDetector:
                 )
 
             except Exception:
-                logger.warning(
+                logger.exception(
                     "Init {}/{} failed, skipping", i + 1, self.n_init + 1
                 )
                 continue
@@ -395,12 +406,128 @@ class HMMRegimeDetector:
         logger.debug("Regime labels: {}", labels)
         return labels
 
+    # -- Serialization ------------------------------------------------------
+
+    def save(self, path: str | Path) -> Path:
+        """Export fitted model parameters to JSON (safe, no pickle).
+
+        Args:
+            path: Output file path.
+
+        Returns:
+            Path to the written JSON file.
+
+        Raises:
+            RuntimeError: If the model has not been fitted.
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Model not fitted. Call .fit() first.")
+
+        artifact = {
+            "version": "1.0.0",
+            "n_states": self.n_states,
+            "covariance_type": self.covariance_type,
+            "means": self._model.means_.tolist(),  # type: ignore[union-attr]
+            "covars": self._model.covars_.tolist(),  # type: ignore[union-attr]
+            "transmat": self._model.transmat_.tolist(),  # type: ignore[union-attr]
+            "startprob": self._model.startprob_.tolist(),  # type: ignore[union-attr]
+        }
+        out = Path(path)
+        out.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        logger.info("Model saved to {}", out)
+        return out
+
+    @classmethod
+    def load(cls, path: str | Path) -> HMMRegimeDetector:
+        """Load model from JSON parameters (safe, no pickle).
+
+        Args:
+            path: Path to JSON model file.
+
+        Returns:
+            Fitted ``HMMRegimeDetector`` instance.
+        """
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        detector = cls(
+            n_states=data["n_states"],
+            covariance_type=data["covariance_type"],
+        )
+        cov_type = cls._COV_TYPE_MAP.get(
+            data["covariance_type"], data["covariance_type"]
+        )
+        model = GaussianHMM(
+            n_components=data["n_states"],
+            covariance_type=cov_type,
+        )
+        model.means_ = np.array(data["means"])
+        model.covars_ = np.array(data["covars"])
+        model.transmat_ = np.array(data["transmat"])
+        model.startprob_ = np.array(data["startprob"])
+
+        detector._model = model
+        detector._is_fitted = True
+        logger.info("Model loaded from {}", path)
+        return detector
+
+    # -- Regime validation --------------------------------------------------
+
+    def validate_regime_quality(
+        self,
+        features: np.ndarray,
+        min_fraction: float = 0.05,
+        min_duration: float = 5.0,
+    ) -> list[dict[str, Any]]:
+        """Check for degenerate regimes after fitting.
+
+        A regime is degenerate if it occupies less than ``min_fraction``
+        of total time or has expected duration below ``min_duration``.
+
+        Args:
+            features: Array used for prediction.
+            min_fraction: Minimum fraction of time in a regime (default 5%).
+            min_duration: Minimum expected duration in observations.
+
+        Returns:
+            List of warnings for degenerate regimes (empty if all OK).
+        """
+        labels = self.predict(features)
+        n_total = len(labels)
+        warnings_list: list[dict[str, Any]] = []
+
+        regime_labels = self.label_regimes()
+        stats = self.get_regime_statistics()
+
+        for stat in stats:
+            count = int((labels == stat.state_id).sum())
+            fraction = count / n_total if n_total > 0 else 0.0
+
+            if fraction < min_fraction:
+                msg = (
+                    f"Regime '{stat.label}' (state {stat.state_id}) occupies "
+                    f"only {fraction:.1%} of time (min {min_fraction:.0%})"
+                )
+                logger.warning(msg)
+                warnings_list.append({"state": stat.state_id, "issue": "low_fraction", "value": fraction})
+
+            if stat.expected_duration < min_duration:
+                msg = (
+                    f"Regime '{stat.label}' (state {stat.state_id}) has expected "
+                    f"duration {stat.expected_duration:.1f} (min {min_duration:.0f})"
+                )
+                logger.warning(msg)
+                warnings_list.append({"state": stat.state_id, "issue": "short_duration", "value": stat.expected_duration})
+
+        if not warnings_list:
+            logger.info("All regimes pass quality checks")
+
+        return warnings_list
+
     # -- Model selection ----------------------------------------------------
 
     def select_best_model(
         self,
         features: np.ndarray,
-        n_states_range: tuple[int, ...] = (2, 3, 4),
+        n_states_range: tuple[int, ...] = (2, 3),
         cov_types: tuple[str, ...] = ("full", "diagonal"),
     ) -> ModelSelectionResult:
         """Train models across a grid and select by BIC.
@@ -571,8 +698,7 @@ class HMMRegimeDetector:
 
         # Transition matrix: empirical from K-Means label sequence
         transmat = np.zeros((self.n_states, self.n_states))
-        for t in range(len(labels) - 1):
-            transmat[labels[t], labels[t + 1]] += 1
+        np.add.at(transmat, (labels[:-1], labels[1:]), 1)
 
         # Normalize rows (add small epsilon to avoid zero rows)
         row_sums = transmat.sum(axis=1, keepdims=True)

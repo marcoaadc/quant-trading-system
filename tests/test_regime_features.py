@@ -281,11 +281,19 @@ class TestRangeZscore:
 class TestComputeAllFeatures:
     """Tests for the composite compute_all_features method."""
 
-    def test_output_columns(
+    def test_output_columns_without_volume(
         self, engineer: RegimeFeatureEngineer, synthetic_ohlcv: pd.DataFrame
     ) -> None:
         features = engineer.compute_all_features(synthetic_ohlcv)
-        assert list(features.columns) == FEATURE_COLUMNS
+        expected = [c for c in FEATURE_COLUMNS if c != "log_rel_volume"]
+        assert list(features.columns) == expected
+
+    def test_output_columns_with_volume(
+        self, synthetic_ohlcv: pd.DataFrame
+    ) -> None:
+        eng = RegimeFeatureEngineer(include_volume=True)
+        features = eng.compute_all_features(synthetic_ohlcv)
+        assert list(features.columns) == list(FEATURE_COLUMNS)
 
     def test_no_nan_after_warmup(
         self, engineer: RegimeFeatureEngineer, synthetic_ohlcv: pd.DataFrame
@@ -360,7 +368,7 @@ class TestStationarityValidation:
     ) -> None:
         features = engineer.compute_all_features(synthetic_ohlcv)
         results = engineer.validate_stationarity(features)
-        for col in FEATURE_COLUMNS:
+        for col in features.columns:
             assert col in results
 
     def test_result_fields(

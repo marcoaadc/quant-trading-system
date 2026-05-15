@@ -28,13 +28,13 @@ from statsmodels.tsa.stattools import adfuller, kpss
 # Feature column names (canonical order)
 # ---------------------------------------------------------------------------
 
-FEATURE_COLUMNS: list[str] = [
+FEATURE_COLUMNS: tuple[str, ...] = (
     "log_return",
     "log_realized_vol",
     "momentum_zscore",
     "log_rel_volume",
     "range_zscore",
-]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +84,7 @@ class RegimeFeatureEngineer:
         zscore_window: int = 60,
         clip_range: float = 5.0,
         epsilon: float = 1e-10,
+        include_volume: bool = False,
     ) -> None:
         self.vol_window = vol_window
         self.mom_window = mom_window
@@ -91,6 +92,7 @@ class RegimeFeatureEngineer:
         self.zscore_window = zscore_window
         self.clip_range = clip_range
         self.epsilon = epsilon
+        self.include_volume = include_volume
 
         # Warm-up = largest window required before features are valid
         self.warmup_period: int = max(
@@ -173,6 +175,7 @@ class RegimeFeatureEngineer:
         ).std()
 
         zscore = (momentum - rolling_mean) / rolling_std
+        zscore = zscore.replace([np.inf, -np.inf], np.nan)
         zscore_clipped: pd.Series = zscore.clip(
             lower=-self.clip_range, upper=self.clip_range
         )
@@ -251,6 +254,7 @@ class RegimeFeatureEngineer:
         ).std()
 
         zscore = (normalized_range - rolling_mean) / rolling_std
+        zscore = zscore.replace([np.inf, -np.inf], np.nan)
         zscore_clipped: pd.Series = zscore.clip(
             lower=-self.clip_range, upper=self.clip_range
         )
@@ -294,19 +298,20 @@ class RegimeFeatureEngineer:
         log_returns = self.compute_log_returns(df)
         log_realized_vol = self.compute_log_realized_volatility(log_returns)
         momentum_zscore = self.compute_momentum_zscore(log_returns)
-        log_rel_volume = self.compute_log_relative_volume(df)
         range_zscore = self.compute_range_zscore(df)
 
-        features = pd.DataFrame(
-            {
-                "log_return": log_returns,
-                "log_realized_vol": log_realized_vol,
-                "momentum_zscore": momentum_zscore,
-                "log_rel_volume": log_rel_volume,
-                "range_zscore": range_zscore,
-            },
-            index=df.index,
-        )
+        feature_dict: dict[str, pd.Series] = {
+            "log_return": log_returns,
+            "log_realized_vol": log_realized_vol,
+            "momentum_zscore": momentum_zscore,
+        }
+
+        if self.include_volume:
+            feature_dict["log_rel_volume"] = self.compute_log_relative_volume(df)
+
+        feature_dict["range_zscore"] = range_zscore
+
+        features = pd.DataFrame(feature_dict, index=df.index)
 
         # Step 2: remove first candle of each session/day
         if hasattr(features.index, "date"):

@@ -15,6 +15,7 @@ Notes on B3 futures via yfinance:
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -239,12 +240,13 @@ class OHLCVIngestor:
                 df = self._clean_dataframe(df)
                 return df
 
-            except Exception:
-                logger.exception(
-                    "Attempt {}/{} failed for ticker '{}'",
+            except (ConnectionError, TimeoutError, OSError) as exc:
+                logger.warning(
+                    "Attempt {}/{} failed for ticker '{}': {}",
                     attempt,
                     self._max_retries,
                     ticker,
+                    exc,
                 )
                 if attempt < self._max_retries:
                     time.sleep(self._retry_delay)
@@ -276,7 +278,7 @@ class OHLCVIngestor:
         df.columns = [c.lower() for c in df.columns]
 
         # Drop rows where all OHLCV values are NaN
-        df.dropna(how="all", inplace=True)
+        df = df.dropna(how="all")
 
         # Ensure index is tz-aware UTC datetime
         if df.index.tz is None:
@@ -369,7 +371,11 @@ def main() -> None:
             return
 
     ingestor = OHLCVIngestor(config, output_dir=args.output_dir)
-    ingestor.run()
+    results = ingestor.run()
+
+    if not results:
+        logger.error("No data was ingested. Exiting with error.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
